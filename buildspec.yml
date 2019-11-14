@@ -1,0 +1,39 @@
+version: 0.2
+
+phases:
+  install:
+    commands:
+      - printf "%s Installing needed packages...\n" "$(date)"
+      - apt-get update -y && apt-get install -y curl
+      - curl -O https://dl.google.com/go/go1.10.1.linux-amd64.tar.gz
+      - tar -C /usr/local -xzf go1.10.1.linux-amd64.tar.gz
+      - export PATH=$PATH:/usr/local/go/bin
+      - printf "%s Logging into ECR\n" "$(date)"
+      - aws --version
+      - $(aws ecr get-login --region $AWS_DEFAULT_REGION --no-include-email)
+      - IMAGE_TAG=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
+  pre_build:
+    commands:
+      - printf "%s Building Go binary for testing...\n" "$(date)"
+      - cd goapi && go build -o goapi
+      - printf "%s Binary build completed. Executing for testing" "$(date)"
+      - ./goapi & export APP_PID="$!"
+      - res_code="$(curl -Is localhost:1337 | awk '{print $2; exit}')"
+      - if [ "$res_code" -ne 200 ]; then echo "Failure, response code - $res_code" && exit 1; fi
+      - printf "%s Tests succeeded. Cleaning up" "$(date)"
+      - rm goapi && cd ..
+  build:
+    commands:
+      - printf "%s Building Docker image." "$(date)"
+      - docker build -t $REPOSITORY_URI:latest .
+      - docker tag $REPOSITORY_URI:latest $REPOSITORY_URI:$IMAGE_TAG
+  post_build:
+    commands:
+      - printf "%s Docker image build complete. Pushing to ECR." "$(date)"
+      - docker push $REPOSITORY_URI:latest
+      - docker push $REPOSITORY_URI:$IMAGE_TAG
+      - printf "%s Writing to definitions file" "$(date)"
+      - printf '[{"name":"%s","imageUri":"%s:%s"}]' "$NAME" "$REPOSITORY_URI" "$IMAGE_TAG" > imagedefinitions.json
+artifacts:
+  files:
+    - imagedefinitions.json
